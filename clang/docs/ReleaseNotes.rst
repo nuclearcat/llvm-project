@@ -551,6 +551,11 @@ Improvements to Clang's diagnostics
 
 - Clang now emits error when attribute is missing closing ``]]`` followed by ``;;``. (#GH187223)
 
+- ``-Wfortify-source`` now warns when the constant-evaluated argument to
+  ``umask`` has bits set outside ``0777``. Those bits are silently discarded
+  by the kernel, so setting them is almost always a typo (matching the
+  bionic libc ``diagnose_if`` check).
+
 Improvements to Clang's time-trace
 ----------------------------------
 

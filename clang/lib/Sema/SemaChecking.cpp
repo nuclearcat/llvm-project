@@ -1490,6 +1490,52 @@ void Sema::checkFortifiedBuiltinMemoryFunction(FunctionDecl *FD,
                           << FunctionName << DestinationStr << SourceStr);
 }
 
+void Sema::checkFortifiedLibcArgument(FunctionDecl *FD, CallExpr *TheCall) {
+  if (TheCall->isValueDependent() || TheCall->isTypeDependent() ||
+      isConstantEvaluatedContext())
+    return;
+  if (!FD->isExternC())
+    return;
+  const IdentifierInfo *II = FD->getIdentifier();
+  if (!II)
+    return;
+
+  // umask(mode_t): warn when the constant-evaluated argument has bits set
+  // outside 0777 (those bits are silently discarded by the kernel).
+  // Require a matching system-header declaration to avoid warning on
+  // user-defined lookalikes. Do not match the `mode_t` typedef spelling:
+  // libc headers disagree on whether the prototype uses `mode_t` directly.
+  auto AnyDeclInSystemHeader = [&](const FunctionDecl *F) {
+    SourceManager &SM = getSourceManager();
+    for (const FunctionDecl *R : F->redecls())
+      if (SM.isInSystemHeader(R->getLocation()))
+        return true;
+    return false;
+  };
+  if (II->isStr("umask") && !FD->isVariadic() && TheCall->getNumArgs() == 1 &&
+      FD->getNumParams() == 1 &&
+      FD->getParamDecl(0)->getType()->isIntegerType() &&
+      FD->getReturnType()->isIntegerType() && AnyDeclInSystemHeader(FD)) {
+    Expr *Arg = TheCall->getArg(0);
+    if (!Arg->getType()->isIntegerType())
+      return;
+    Expr::EvalResult R;
+    if (!Arg->EvaluateAsInt(R, getASTContext()))
+      return;
+    // Operate on the raw two's-complement bit pattern so that negative
+    // literals (which convert to large unsigned mode_t values) are caught.
+    llvm::APInt RawValue = R.Val.getInt();
+    llvm::APInt Mask(RawValue.getBitWidth(), 0777);
+    llvm::APInt Extra = RawValue & ~Mask;
+    if (Extra == 0)
+      return;
+    SmallString<16> ExtraStr;
+    Extra.toString(ExtraStr, /*Radix=*/8, /*Signed=*/false);
+    Diag(TheCall->getBeginLoc(), diag::warn_fortify_umask_unused_bits)
+        << ExtraStr;
+  }
+}
+
 static bool BuiltinSEHScopeCheck(Sema &SemaRef, CallExpr *TheCall,
                                  Scope::ScopeFlags NeededScopeFlags,
                                  unsigned DiagID) {
